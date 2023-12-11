@@ -1,0 +1,6 @@
+[submodule "esp-idf"]
+	path = esp-idf
+	url = https://github.com/espressif/esp-idf.git
+[submodule "components/lgfx"]
+	path = components/lgfx
+	url = https://github.com/lovyan03/LovyanGFX.git

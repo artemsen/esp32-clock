@@ -1,6 +1,6 @@
 # register project as IDF component
 idf_component_register(
-    SRCS         "main.c" "display.cpp"
+    SRCS         "main.c" "resources.c" "display.cpp"
     INCLUDE_DIRS "."
     REQUIRES     "lgfx" "esp_wifi"
 )

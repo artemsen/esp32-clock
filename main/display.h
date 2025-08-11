@@ -3,11 +3,28 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
-#ifdef __cplusplus
-extern "C" { // LGFX is C++
-#endif
+// Display size
+#define DISPLAY_WIDTH  480
+#define DISPLAY_HEIGHT 320
+
+/**
+ * Info to display.
+ */
+struct info {
+    bool wifi;
+    bool ntp;
+
+    uint8_t hours;
+    uint8_t minutes;
+    uint8_t seconds;
+
+    float temperature;
+    float humidity;
+    float pressure;
+};
 
 /**
  * Initialize LCD display.
@@ -15,17 +32,7 @@ extern "C" { // LGFX is C++
 void display_init(void);
 
 /**
- * Set brightness and color.
- * @param brightness value to set (0-255)
- * @param r,g,b output color
+ * Redraw display.
+ * @param info values to display
  */
-void display_setup(uint8_t brightness, uint8_t r, uint8_t g, uint8_t b);
-
-/**
- * Update time on display.
- */
-void display_update(void);
-
-#ifdef __cplusplus
-} // extern "C"
-#endif
+void display_redraw(const struct info* info);

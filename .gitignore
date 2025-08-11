@@ -1,3 +1,7 @@
-build
-.cache
-sdkconfig
+/dependencies.lock
+/managed_components
+/sdkconfig
+
+# LSP
+/compile_commands.json
+/.cache

@@ -1,100 +1,115 @@
 // SPDX-License-Identifier: MIT
 // Display interface.
 
+extern "C" {
 #include "display.h"
 
-#include "img/digit0b.xbm"
-#include "img/digit1b.xbm"
-#include "img/digit2b.xbm"
-#include "img/digit3b.xbm"
-#include "img/digit4b.xbm"
-#include "img/digit5b.xbm"
-#include "img/digit6b.xbm"
-#include "img/digit7b.xbm"
-#include "img/digit8b.xbm"
-#include "img/digit9b.xbm"
-#include "img/digit0s.xbm"
-#include "img/digit1s.xbm"
-#include "img/digit2s.xbm"
-#include "img/digit3s.xbm"
-#include "img/digit4s.xbm"
-#include "img/digit5s.xbm"
-#include "img/digit6s.xbm"
-#include "img/digit7s.xbm"
-#include "img/digit8s.xbm"
-#include "img/digit9s.xbm"
-#include "img/delim_b.xbm"
-#include "img/delim_s.xbm"
+#include "resources.h"
+}
 
 #define LGFX_WT32_SC01
 #include <LGFX_AUTODETECT.hpp>
 
-// Display size
-static constexpr uint32_t display_width = 480;
-static constexpr uint32_t display_height = 320;
-
-// Display context: LCD state, current color and showed time
+// LCD handle
 static LGFX lcd;
-static uint32_t current_color;
-static struct tm current_time;
 
-// Digits description (something like a font)
-struct digit {
-    uint32_t width;
-    uint32_t height;
-    uint32_t space;          // space between symbols
-    const uint8_t* mask[10]; // bits for each digit 0-9
-};
-
-// Big digits
-static const struct digit big_digits = {
-    80, 140, 4, {
-        digit0b_bits, digit1b_bits, digit2b_bits, digit3b_bits, digit4b_bits,
-        digit5b_bits, digit6b_bits, digit7b_bits, digit8b_bits, digit9b_bits
-    }
-};
-
-// Small digits
-static const struct digit small_digits = {
-    40, 64, 2, {
-        digit0s_bits, digit1s_bits, digit2s_bits, digit3s_bits, digit4s_bits,
-        digit5s_bits, digit6s_bits, digit7s_bits, digit8s_bits, digit9s_bits
-    }
+// Currently displayed info
+static struct info curr_info = {
+    .wifi = false,
+    .ntp = false,
+    .hours = 255,
+    .minutes = 255,
+    .seconds = 255,
+    .temperature = 0,
+    .humidity = 0,
+    .pressure = 0,
 };
 
 /**
- * Fill bit mask with the current color.
+ * Draw masked image.
+ * @param font pointer to the image instance to use
  * @param x,y coordinates of the left top corner
- * @param width,height size of area
- * @param mask pointer to bit mask
+ * @param color output color
  */
-static void fill_bits(uint32_t x, uint32_t y, uint32_t width, uint32_t height, const uint8_t* mask)
+static void draw_image(const struct image* img, size_t x, size_t y,
+                       uint32_t color)
 {
-    for (uint32_t dy = 0; dy < height; ++dy) {
-        const uint32_t disp_y = y + dy;
-        for (uint32_t dx = 0; dx < width; ++dx) {
-            const uint32_t disp_x = x + dx;
-            const size_t bit_index = dy * width + dx;
-            const size_t bit_nbyte = bit_index / 8;
-            const uint8_t bit_val = (mask[bit_nbyte] >> (bit_index % 8)) & 1;
-            const uint32_t pixel = bit_val * current_color;
+    for (size_t dy = 0; dy < img->height; ++dy) {
+        const size_t disp_y = dy + y;
+        for (size_t dx = 0; dx < img->width; ++dx) {
+            const size_t disp_x = dx + x;
+            const uint32_t pixel = color * image_bit(img, dx, dy);
             lcd.writePixel(disp_x, disp_y, pixel);
         }
     }
 }
 
 /**
- * Draw two-digit number.
+ * Draw masked image from the font.
+ * @param font pointer to the font instance to use
+ * @param index index of the font symbol
  * @param x,y coordinates of the left top corner
- * @param dig pointer to digits description
- * @param num two-digit number to draw (0-99)
+ * @param color output color
  */
-static void draw_number(uint32_t x, uint32_t y, const struct digit* dig, uint8_t num)
+static void draw_font(const struct font* font, size_t index, size_t x, size_t y,
+                      uint32_t color)
 {
-    const uint8_t first = num / 10;
-    const uint8_t second = num - first * 10;
-    fill_bits(x, y, dig->width, dig->height, dig->mask[first]);
-    fill_bits(x + dig->width + dig->space, y, dig->width, dig->height, dig->mask[second]);
+    for (size_t dy = 0; dy < font->height; ++dy) {
+        const size_t disp_y = dy + y;
+        for (size_t dx = 0; dx < font->width; ++dx) {
+            const size_t disp_x = dx + x;
+            const uint32_t pixel = color * font_bit(font, index, dx, dy);
+            lcd.writePixel(disp_x, disp_y, pixel);
+        }
+    }
+}
+
+/**
+ * Draw number.
+ * @param font pointer to the font instance to use
+ * @param x,y coordinates of the left top corner
+ * @param color output color
+ * @param value number to draw
+ * @param min_digits minimal number of digits to draw
+ */
+static void draw_number(const struct font* font, size_t x, size_t y,
+                        uint32_t color, size_t value, size_t min_digits)
+{
+    size_t bcd = 0;
+    size_t digits = 0;
+    while (value > 0) {
+        bcd |= (value % 10) << (digits * 4);
+        value /= 10;
+        ++digits;
+    }
+    if (digits < min_digits) {
+        digits = min_digits;
+    }
+
+    for (size_t i = 0; i < digits; ++i) {
+        const size_t start_bit = (digits - i - 1) * 4;
+        const uint8_t digit = (bcd >> start_bit) & 0xf;
+        const size_t x_offset = x + (font->width + font->spacing) * i;
+        draw_font(font, digit, x_offset, y, color);
+    }
+}
+
+/**
+ * Fill rectangle with specified color.
+ * @param x,y coordinates of the left top corner
+ * @param width,height size of the rectangle
+ * @param color output color
+ */
+static void fill(size_t x, size_t y, size_t width, size_t height,
+                 uint32_t color)
+{
+    const size_t max_x = x + width;
+    const size_t max_y = y + height;
+    for (; y < max_y; ++y) {
+        for (size_t dx = x; dx < max_x; ++dx) {
+            lcd.writePixel(dx, y, color);
+        }
+    }
 }
 
 extern "C" void display_init(void)
@@ -102,36 +117,60 @@ extern "C" void display_init(void)
     lcd.init();
     lcd.setRotation(1);
     lcd.setColorDepth(lgfx::rgb888_3Byte);
-    memset(&current_time, 0xff, sizeof(current_time));
+    lcd.setBrightness(16);
 }
 
-extern "C" void display_setup(uint8_t brightness, uint8_t r, uint8_t g, uint8_t b)
+extern "C" void display_redraw(const struct info* info)
 {
-    lcd.setBrightness(brightness);
-    current_color = lcd.color888(r, g, b);
-    memset(&current_time, 0xff, sizeof(current_time)); // force redraw
-}
-
-extern "C" void display_update(void)
-{
-    time_t now;
-    struct tm previous;
-
-    memcpy(&previous, &current_time, sizeof(current_time));
-    time(&now);
-    localtime_r(&now, &current_time);
+    const bool first_run = curr_info.hours >= 24;
+    const uint32_t main_color = lcd.color888(0xff, 0, 0);
 
     lcd.startWrite();
 
-    // draw time
-    if (current_time.tm_hour != previous.tm_hour) {
-        draw_number(34, 40, &big_digits, current_time.tm_hour);
-        fill_bits(200, 40, delim_b_width, delim_b_height, delim_b_bits);
+    // wifi/ntp status
+    if (first_run || curr_info.wifi != info->wifi ||
+        curr_info.ntp != info->ntp) {
+        const struct image* img = NULL;
+        if (!info->wifi) {
+            img = get_image(image_wifi);
+        } else if (!info->ntp) {
+            img = get_image(image_ntp);
+        }
+        if (img) {
+            draw_image(img, DISPLAY_WIDTH / 2 - 10, 0,
+                       lcd.color888(0xff, 0xff, 0));
+        } else {
+            fill(DISPLAY_WIDTH / 2 - 10, 0, 20, 20, lcd.color888(0, 0, 0));
+        }
     }
-    if (current_time.tm_min != previous.tm_min) {
-        draw_number(282, 40, &big_digits, current_time.tm_min);
+
+    // static elements
+    if (first_run) {
+        const uint32_t clr = lcd.color888(0xa0, 0x00, 0x00);
+        draw_image(get_image(image_celsius), 50, 250, clr);
+        draw_image(get_image(image_percent), 155, 250, clr);
+        draw_image(get_image(image_mm), 260, 250, clr);
+
+        fill(DISPLAY_WIDTH / 2 - 10, 50, 20, 20, main_color);
+        fill(DISPLAY_WIDTH / 2 - 10, 100, 20, 20, main_color);
     }
-    draw_number(360, 200, &small_digits, current_time.tm_sec);
+
+    // current time
+    if (curr_info.hours != info->hours) {
+        draw_number(get_font(font100), 10, 10, main_color, info->hours, 2);
+    }
+    if (curr_info.minutes != info->minutes) {
+        draw_number(get_font(font100), 270, 10, main_color, info->minutes, 2);
+    }
+    draw_number(get_font(font60), 350, 190, main_color, info->seconds, 2);
+
+    // temperature/humidity/pressure
+    draw_number(get_font(font28), 40, 200, main_color, info->temperature, 2);
+    draw_number(get_font(font28), 140, 200, main_color, info->humidity, 2);
+    const float pressure_mm = info->pressure / 1.3332;
+    draw_number(get_font(font28), 230, 200, main_color, pressure_mm, 3);
 
     lcd.endWrite();
+
+    curr_info = *info;
 }
